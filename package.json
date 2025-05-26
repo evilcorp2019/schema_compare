@@ -1,5 +1,5 @@
 {
-  "name": "csv-schema-comparison-tool",
+  "name": "schema-compare",
   "version": "1.0.0",
   "description": "A web-based tool for comparing CSV schema files between different environments",
   "main": "index.html",
@@ -17,7 +17,7 @@
     "excel",
     "data-analysis"
   ],
-  "author": "Your Name",
+  "author": "evilcorp2019",
   "license": "MIT",
   "dependencies": {
     "react": "^18.2.0",
@@ -35,5 +35,5 @@
     "tailwindcss": "^3.3.3",
     "vite": "^4.4.5"
   },
-  "homepage": "https://YOUR_USERNAME.github.io/YOUR_REPO_NAME"
+  "homepage": "https://evilcorp2019.github.io/schema_compare"
 }
