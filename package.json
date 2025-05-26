@@ -1,0 +1,39 @@
+{
+  "name": "csv-schema-comparison-tool",
+  "version": "1.0.0",
+  "description": "A web-based tool for comparing CSV schema files between different environments",
+  "main": "index.html",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "keywords": [
+    "csv",
+    "schema",
+    "comparison",
+    "database",
+    "excel",
+    "data-analysis"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "papaparse": "^5.4.1",
+    "xlsx": "^0.18.5",
+    "lucide-react": "^0.263.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.15",
+    "@types/react-dom": "^18.2.7",
+    "@vitejs/plugin-react": "^4.0.3",
+    "autoprefixer": "^10.4.14",
+    "postcss": "^8.4.27",
+    "tailwindcss": "^3.3.3",
+    "vite": "^4.4.5"
+  },
+  "homepage": "https://YOUR_USERNAME.github.io/YOUR_REPO_NAME"
+}
