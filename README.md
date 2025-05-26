@@ -149,5 +149,5 @@ If you encounter any issues:
 
 ---
 
-**Built with ❤️ for database schema management**  
+**Built with ❤️ for database schema management by Rushabh Shah**  
 **Repository**: [evilcorp2019/schema_compare](https://github.com/evilcorp2019/schema_compare)
