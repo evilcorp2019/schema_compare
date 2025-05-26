@@ -256,6 +256,28 @@
             const missingEnv1WS = XLSX.utils.json_to_sheet(results.missingInEnv1);
             XLSX.utils.book_append_sheet(wb, missingEnv1WS, `Missing_in_${config.env1}`);
             
+            // Set tab colors (matching Python script exactly)
+            const setTabColors = () => {
+              const tabColors = {
+                'Reconciliation': 'ADD8E6',           // Light blue
+                [`Missing_in_${config.env1}`]: 'ADE6D8',  // Light green
+                [`Missing_in_${config.env2}`]: 'ADE6D8',  // Light green  
+                'Summary_change': 'E6BCAD',          // Light orange/peach
+                'Master_change': 'E6BCAD',           // Light orange/peach
+                'Master': 'BCADE6'                   // Light purple
+              };
+              
+              Object.keys(tabColors).forEach(sheetName => {
+                if (wb.Sheets[sheetName]) {
+                  if (!wb.Sheets[sheetName]['!tabcolor']) {
+                    wb.Sheets[sheetName]['!tabcolor'] = { rgb: tabColors[sheetName] };
+                  }
+                }
+              });
+            };
+            
+            setTabColors();
+            
             // Download file
             XLSX.writeFile(wb, `Comparison_${config.env1}_${config.env2}.xlsx`);
           };
