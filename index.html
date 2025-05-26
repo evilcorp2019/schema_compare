@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSV Schema Comparison Tool</title>
+    <meta name="description" content="Compare database schemas between different environments with this powerful web-based tool">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23indigo' stroke-width='2'><path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'/><polyline points='14,2 14,8 20,8'/><line x1='16' y1='13' x2='8' y2='13'/><line x1='16' y1='17' x2='8' y2='17'/><polyline points='10,9 9,9 8,9'/></svg>">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom": "https://esm.sh/react-dom@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "papaparse": "https://esm.sh/papaparse@5.4.1",
+        "xlsx": "https://esm.sh/xlsx@0.18.5",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1"
+      }
+    }
+    </script>
+    <style>
+        .animate-spin {
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="module">
+        import React, { useState, useCallback } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { Upload, Download, FileText, AlertCircle, CheckCircle, BarChart3, FileSpreadsheet } from 'lucide-react';
+        import Papa from 'papaparse';
+        import * as XLSX from 'xlsx';
+
+        const CSVComparisonApp = () => {
+          const [files, setFiles] = useState({ env1: null, env2: null });
+          const [config, setConfig] = useState({
+            env1: 'Prod',
+            env2: 'Const',
+            compareColumns: [
+              'Type', 'Computed', 'Length', 'Prec', 'Scale', 'Nullable',
+              'TrimTrailingBlanks', 'FixedLenNullInSource', 'Collation'
+            ]
+          });
+          const [results, setResults] = useState(null);
+          const [processing, setProcessing] = useState(false);
+          const [error, setError] = useState(null);
+
+          const handleFileUpload = (env, file) => {
+            setFiles(prev => ({ ...prev, [env]: file }));
+            setError(null);
+          };
+
+          const cleanAndPrepareDF = (csvData, envName) => {
+            const df = csvData.map(row => {
+              const cleanedRow = {};
+              
+              cleanedRow['Table Name'] = (row['Table Name'] || '').replace(/\s/g, '');
+              cleanedRow['Column_name'] = (row['Column_name'] || '').replace(/\s/g, '');
+              cleanedRow['Table_name|Column_name'] = `${cleanedRow['Table Name']}|${cleanedRow['Column_name']}`;
+              
+              Object.keys(row).forEach(col => {
+                if (!['Table Name', 'Column_name', 'Table_name|Column_name'].includes(col)) {
+                  cleanedRow[`${col}_${envName}`] = row[col] || '';
+                }
+              });
+              
+              return cleanedRow;
+            });
+            
+            return df;
+          };
+
+          const createComparisonColumns = (mergedData, fields, env1, env2) => {
+            return mergedData.map(row => {
+              const newRow = { ...row };
+              let falseCount = 0;
+              
+              fields.forEach(field => {
+                const val1 = row[`${field}_${env1}`];
+                const val2 = row[`${field}_${env2}`];
+                const isEqual = val1 === val2;
+                newRow[`${field}_compare`] = isEqual;
+                if (!isEqual) falseCount++;
+              });
+              
+              newRow['False_Count'] = falseCount;
+              return newRow;
+            });
+          };
+
+          const mergeDataFrames = (df1, df2, env1, env2) => {
+            const allKeys = new Set();
+            df1.forEach(row => allKeys.add(row['Table_name|Column_name']));
+            df2.forEach(row => allKeys.add(row['Table_name|Column_name']));
+            
+            const merged = [];
+            
+            allKeys.forEach(key => {
+              const row1 = df1.find(r => r['Table_name|Column_name'] === key);
+              const row2 = df2.find(r => r['Table_name|Column_name'] === key);
+              
+              const mergedRow = { ...row1, ...row2 };
+              
+              if (row1 && row2) {
+                mergedRow['_merge'] = 'both';
+              } else if (row1) {
+                mergedRow['_merge'] = 'left_only';
+              } else {
+                mergedRow['_merge'] = 'right_only';
+              }
+              
+              merged.push(mergedRow);
+            });
+            
+            return merged;
+          };
+
+          const getSummary = (masterChangeData, compareFields, env1) => {
+            return masterChangeData.map(row => ({
+              'Table_Name': row[`Table Name_${env1}`] || '',
+              'Column_Name': row[`Column_name_${env1}`] || '',
+              'Change in Scheme Fields': compareFields
+                .filter(col => row[col] === false)
+                .map(col => col.replace('_compare', ''))
+                .join(', '),
+              'Counts': row['False_Count'] || 0
+            }));
+          };
+
+          const processFiles = async () => {
+            if (!files.env1 || !files.env2) {
+              setError('Please upload both CSV files');
+              return;
+            }
+
+            setProcessing(true);
+            setError(null);
+
+            try {
+              const parseFile = (file) => {
+                return new Promise((resolve, reject) => {
+                  Papa.parse(file, {
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: (results) => resolve(results.data),
+                    error: (error) => reject(error)
+                  });
+                });
+              };
+
+              const [data1, data2] = await Promise.all([
+                parseFile(files.env1),
+                parseFile(files.env2)
+              ]);
+
+              const df1 = cleanAndPrepareDF(data1, config.env1);
+              const df2 = cleanAndPrepareDF(data2, config.env2);
+              
+              const lookupDF = mergeDataFrames(df1, df2, config.env1, config.env2);
+              const processedData = createComparisonColumns(lookupDF, config.compareColumns, config.env1, config.env2);
+              
+              const compareFields = config.compareColumns.map(col => `${col}_compare`);
+              const masterChange = processedData.filter(row => row['False_Count'] > 0 && row['_merge'] === 'both');
+              const summaryChange = getSummary(masterChange, compareFields, config.env1);
+              
+              const env1Headers = Object.keys(processedData[0] || {}).filter(col => col.endsWith(`_${config.env1}`));
+              const env2Headers = Object.keys(processedData[0] || {}).filter(col => col.endsWith(`_${config.env2}`));
+              
+              const missingInEnv2 = processedData
+                .filter(row => row['_merge'] === 'left_only')
+                .map(row => {
+                  const filtered = {};
+                  env1Headers.forEach(header => filtered[header] = row[header]);
+                  return filtered;
+                });
+                
+              const missingInEnv1 = processedData
+                .filter(row => row['_merge'] === 'right_only')
+                .map(row => {
+                  const filtered = {};
+                  env2Headers.forEach(header => filtered[header] = row[header]);
+                  return filtered;
+                });
+
+              setResults({
+                master: processedData,
+                masterChange,
+                summaryChange,
+                missingInEnv1,
+                missingInEnv2,
+                reconciliation: {
+                  env1Count: df1.length,
+                  env2Count: df2.length,
+                  missingInEnv1Count: missingInEnv1.length,
+                  missingInEnv2Count: missingInEnv2.length,
+                  changesCount: summaryChange.length
+                }
+              });
+            } catch (err) {
+              setError(`Error processing files: ${err.message}`);
+            } finally {
+              setProcessing(false);
+            }
+          };
+
+          const generateExcel = () => {
+            if (!results) return;
+
+            const wb = XLSX.utils.book_new();
+            
+            const reconciliationData = [
+              ['Reconciliation of records'],
+              [],
+              [`Counts of Records in ${config.env1}`, results.reconciliation.env1Count],
+              [`Add: Records missing in ${config.env1}`, results.reconciliation.missingInEnv1Count],
+              [`Less: Records missing in ${config.env2}`, results.reconciliation.missingInEnv2Count],
+              [`Counts of Records in ${config.env2}`, results.reconciliation.env2Count],
+              [],
+              ['Count of Changes in existing columns'],
+              [`There are changes in ${results.reconciliation.changesCount} records.`]
+            ];
+            
+            const reconciliationWS = XLSX.utils.aoa_to_sheet(reconciliationData);
+            XLSX.utils.book_append_sheet(wb, reconciliationWS, 'Reconciliation');
+            
+            const masterWS = XLSX.utils.json_to_sheet(results.master);
+            XLSX.utils.book_append_sheet(wb, masterWS, 'Master');
+            
+            const masterChangeWS = XLSX.utils.json_to_sheet(results.masterChange);
+            XLSX.utils.book_append_sheet(wb, masterChangeWS, 'Master_change');
+            
+            const summaryChangeWS = XLSX.utils.json_to_sheet(results.summaryChange);
+            XLSX.utils.book_append_sheet(wb, summaryChangeWS, 'Summary_change');
+            
+            const missingEnv2WS = XLSX.utils.json_to_sheet(results.missingInEnv2);
+            XLSX.utils.book_append_sheet(wb, missingEnv2WS, `Missing_in_${config.env2}`);
+            
+            const missingEnv1WS = XLSX.utils.json_to_sheet(results.missingInEnv1);
+            XLSX.utils.book_append_sheet(wb, missingEnv1WS, `Missing_in_${config.env1}`);
+            
+            XLSX.writeFile(wb, `Comparison_${config.env1}_${config.env2}.xlsx`);
+          };
+
+          return React.createElement('div', { className: "min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50" },
+            React.createElement('div', { className: "container mx-auto px-4 py-8" },
+              React.createElement('div', { className: "text-center mb-8" },
+                React.createElement('div', { className: "flex items-center justify-center mb-4" },
+                  React.createElement(FileSpreadsheet, { className: "w-12 h-12 text-indigo-600 mr-3" }),
+                  React.createElement('h1', { className: "text-4xl font-bold text-gray-800" }, 'CSV Schema Comparison Tool')
+                ),
+                React.createElement('p', { className: "text-lg text-gray-600 max-w-2xl mx-auto" },
+                  'Compare database schemas between two environments and generate comprehensive analysis reports'
+                )
+              ),
+              React.createElement('div', { className: "bg-white rounded-xl shadow-lg p-6 mb-8" },
+                React.createElement('h2', { className: "text-2xl font-semibold text-gray-800 mb-4 flex items-center" },
+                  React.createElement(BarChart3, { className: "w-6 h-6 mr-2 text-indigo-600" }),
+                  'Configuration'
+                ),
+                React.createElement('div', { className: "grid md:grid-cols-2 gap-6" },
+                  React.createElement('div', null,
+                    React.createElement('label', { className: "block text-sm font-medium text-gray-700 mb-2" }, 'Environment 1 Name'),
+                    React.createElement('input', {
+                      type: "text",
+                      value: config.env1,
+                      onChange: (e) => setConfig(prev => ({ ...prev, env1: e.target.value })),
+                      className: "w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    })
+                  ),
+                  React.createElement('div', null,
+                    React.createElement('label', { className: "block text-sm font-medium text-gray-700 mb-2" }, 'Environment 2 Name'),
+                    React.createElement('input', {
+                      type: "text",
+                      value: config.env2,
+                      onChange: (e) => setConfig(prev => ({ ...prev, env2: e.target.value })),
+                      className: "w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    })
+                  )
+                ),
+                React.createElement('div', { className: "mt-6" },
+                  React.createElement('label', { className: "block text-sm font-medium text-gray-700 mb-2" }, 'Comparison Columns'),
+                  React.createElement('div', { className: "grid grid-cols-2 md:grid-cols-3 gap-2" },
+                    config.compareColumns.map((col, index) =>
+                      React.createElement('div', { key: index, className: "flex items-center" },
+                        React.createElement('input', {
+                          type: "checkbox",
+                          checked: true,
+                          onChange: () => {},
+                          className: "mr-2 h-4 w-4 text-indigo-600 rounded"
+                        }),
+                        React.createElement('span', { className: "text-sm text-gray-700" }, col)
+                      )
+                    )
+                  )
+                )
+              ),
+              React.createElement('div', { className: "grid md:grid-cols-2 gap-6 mb-8" },
+                ['env1', 'env2'].map((env) =>
+                  React.createElement('div', { key: env, className: "bg-white rounded-xl shadow-lg p-6" },
+                    React.createElement('h3', { className: "text-xl font-semibold text-gray-800 mb-4 flex items-center" },
+                      React.createElement(Upload, { className: "w-5 h-5 mr-2 text-indigo-600" }),
+                      `${config[env]} Environment CSV`
+                    ),
+                    React.createElement('div', { className: "border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-indigo-400 transition-colors" },
+                      React.createElement('input', {
+                        type: "file",
+                        accept: ".csv",
+                        onChange: (e) => handleFileUpload(env, e.target.files[0]),
+                        className: "hidden",
+                        id: `file-${env}`
+                      }),
+                      React.createElement('label', { htmlFor: `file-${env}`, className: "cursor-pointer" },
+                        React.createElement(FileText, { className: "w-12 h-12 text-gray-400 mx-auto mb-3" }),
+                        React.createElement('p', { className: "text-gray-600" },
+                          files[env] ? files[env].name : 'Click to upload CSV file'
+                        ),
+                        files[env] && React.createElement('p', { className: "text-sm text-green-600 mt-2 flex items-center justify-center" },
+                          React.createElement(CheckCircle, { className: "w-4 h-4 mr-1" }),
+                          'File uploaded successfully'
+                        )
+                      )
+                    )
+                  )
+                )
+              ),
+              error && React.createElement('div', { className: "bg-red-50 border border-red-200 rounded-lg p-4 mb-6" },
+                React.createElement('div', { className: "flex items-center" },
+                  React.createElement(AlertCircle, { className: "w-5 h-5 text-red-600 mr-2" }),
+                  React.createElement('span', { className: "text-red-800" }, error)
+                )
+              ),
+              React.createElement('div', { className: "text-center mb-8" },
+                React.createElement('button', {
+                  onClick: processFiles,
+                  disabled: !files.env1 || !files.env2 || processing,
+                  className: "bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white font-semibold py-3 px-8 rounded-lg transition-colors flex items-center mx-auto"
+                },
+                  processing ? [
+                    React.createElement('div', { key: "spinner", className: "animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2" }),
+                    'Processing...'
+                  ] : [
+                    React.createElement(BarChart3, { key: "icon", className: "w-5 h-5 mr-2" }),
+                    'Compare Files'
+                  ]
+                )
+              ),
+              results && React.createElement('div', { className: "bg-white rounded-xl shadow-lg p-6" },
+                React.createElement('div', { className: "flex items-center justify-between mb-6" },
+                  React.createElement('h2', { className: "text-2xl font-semibold text-gray-800 flex items-center" },
+                    React.createElement(CheckCircle, { className: "w-6 h-6 mr-2 text-green-600" }),
+                    'Analysis Results'
+                  ),
+                  React.createElement('button', {
+                    onClick: generateExcel,
+                    className: "bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg flex items-center transition-colors"
+                  },
+                    React.createElement(Download, { className: "w-4 h-4 mr-2" }),
+                    'Download Excel Report'
+                  )
+                ),
+                React.createElement('div', { className: "grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8" },
+                  React.createElement('div', { className: "bg-blue-50 rounded-lg p-4" },
+                    React.createElement('h4', { className: "font-semibold text-blue-800 mb-2" }, `Records in ${config.env1}`),
+                    React.createElement('p', { className: "text-2xl font-bold text-blue-600" }, results.reconciliation.env1Count)
+                  ),
+                  React.createElement('div', { className: "bg-green-50 rounded-lg p-4" },
+                    React.createElement('h4', { className: "font-semibold text-green-800 mb-2" }, `Records in ${config.env2}`),
+                    React.createElement('p', { className: "text-2xl font-bold text-green-600" }, results.reconciliation.env2Count)
+                  ),
+                  React.createElement('div', { className: "bg-orange-50 rounded-lg p-4" },
+                    React.createElement('h4', { className: "font-semibold text-orange-800 mb-2" }, 'Schema Changes'),
+                    React.createElement('p', { className: "text-2xl font-bold text-orange-600" }, results.reconciliation.changesCount)
+                  ),
+                  React.createElement('div', { className: "bg-red-50 rounded-lg p-4" },
+                    React.createElement('h4', { className: "font-semibold text-red-800 mb-2" }, `Missing in ${config.env1}`),
+                    React.createElement('p', { className: "text-2xl font-bold text-red-600" }, results.reconciliation.missingInEnv1Count)
+                  ),
+                  React.createElement('div', { className: "bg-purple-50 rounded-lg p-4" },
+                    React.createElement('h4', { className: "font-semibold text-purple-800 mb-2" }, `Missing in ${config.env2}`),
+                    React.createElement('p', { className: "text-2xl font-bold text-purple-600" }, results.reconciliation.missingInEnv2Count)
+                  )
+                ),
+                results.summaryChange.length > 0 && React.createElement('div', { className: "mt-6" },
+                  React.createElement('h3', { className: "text-lg font-semibold text-gray-800 mb-4" }, 'Schema Changes Summary'),
+                  React.createElement('div', { className: "overflow-x-auto" },
+                    React.createElement('table', { className: "min-w-full bg-white border border-gray-200 rounded-lg" },
+                      React.createElement('thead', { className: "bg-gray-50" },
+                        React.createElement('tr', null,
+                          React.createElement('th', { className: "px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" }, 'Table Name'),
+                          React.createElement('th', { className: "px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" }, 'Column Name'),
+                          React.createElement('th', { className: "px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" }, 'Changed Fields'),
+                          React.createElement('th', { className: "px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" }, 'Count')
+                        )
+                      ),
+                      React.createElement('tbody', { className: "divide-y divide-gray-200" },
+                        results.summaryChange.slice(0, 10).map((row, index) =>
+                          React.createElement('tr', { key: index, className: "hover:bg-gray-50" },
+                            React.createElement('td', { className: "px-4 py-3 text-sm text-gray-900" }, row.Table_Name),
+                            React.createElement('td', { className: "px-4 py-3 text-sm text-gray-900" }, row.Column_Name),
+                            React.createElement('td', { className: "px-4 py-3 text-sm text-gray-600" }, row['Change in Scheme Fields']),
+                            React.createElement('td', { className: "px-4 py-3 text-sm text-gray-900" }, row.Counts)
+                          )
+                        )
+                      )
+                    ),
+                    results.summaryChange.length > 10 && React.createElement('p', { className: "text-sm text-gray-500 mt-2 text-center" },
+                      `Showing first 10 of ${results.summaryChange.length} changes. Download Excel for complete report.`
+                    )
+                  )
+                )
+              )
+            )
+          );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(React.createElement(CSVComparisonApp));
+    </script>
+</body>
+</html>
