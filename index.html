@@ -182,11 +182,16 @@
               const env1Headers = Object.keys(processedData[0] || {}).filter(col => col.endsWith(`_${config.env1}`));
               const env2Headers = Object.keys(processedData[0] || {}).filter(col => col.endsWith(`_${config.env2}`));
               
+              // Add basic identifying columns to the headers
+              const basicColumns = ['Table Name', 'Column_name', 'Table_name|Column_name'];
+              const env1HeadersWithBasic = [...basicColumns, ...env1Headers];
+              const env2HeadersWithBasic = [...basicColumns, ...env2Headers];
+              
               const missingInEnv2 = processedData
                 .filter(row => row['_merge'] === 'left_only')
                 .map(row => {
                   const filtered = {};
-                  env1Headers.forEach(header => filtered[header] = row[header]);
+                  env1HeadersWithBasic.forEach(header => filtered[header] = row[header] || '');
                   return filtered;
                 });
                 
@@ -194,7 +199,7 @@
                 .filter(row => row['_merge'] === 'right_only')
                 .map(row => {
                   const filtered = {};
-                  env2Headers.forEach(header => filtered[header] = row[header]);
+                  env2HeadersWithBasic.forEach(header => filtered[header] = row[header] || '');
                   return filtered;
                 });
 
